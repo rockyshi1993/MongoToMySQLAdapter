@@ -15,7 +15,7 @@ const {
     MongoAggregationBuilder,
     SQLGenerationError,
     Logger
-} = require("./index");
+} = require("../index");
 const assert = require("assert");
 
 /**

@@ -1,7 +1,7 @@
 "use strict";
 
 // 引入转换模块中的 MongoUpdateBuilder 以及其他必要接口（确保 mongo2mysql.js 与该文件在同一目录下）
-const { MongoUpdateBuilder } = require('./index');
+const { MongoUpdateBuilder } = require('../index');
 
 // 使用立即执行函数封装测试用例
 (async () => {

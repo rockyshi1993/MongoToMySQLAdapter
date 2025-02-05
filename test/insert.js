@@ -1,7 +1,7 @@
 "use strict";
 
 // 引入转换模块中的 MongoInsertBuilder 以及其他必要接口
-const { MongoInsertBuilder, SQLGenerationError } = require('./index');
+const { MongoInsertBuilder, SQLGenerationError } = require('../index');
 
 // 使用立即执行函数封装测试用例
 (async () => {

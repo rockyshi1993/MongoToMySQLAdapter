@@ -1,7 +1,7 @@
 "use strict";
 
 // 引入转换模块中的 MongoQueryBuilder 以及其他必要接口（确保 mongo2mysql.js 与该文件在同一目录下）
-const { MongoQueryBuilder, SQLGenerationError } = require('./index');
+const { MongoQueryBuilder, SQLGenerationError } = require('../index');
 
 // 使用立即执行函数封装测试用例
 (async () => {
@@ -202,7 +202,6 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
             .skip(10);              // 偏移量
 
         let result = queryBuilder.toSQL();
-        console.log("SQL:", result.sql);
         logSuccess("✔ Test Q15 - 分页与排序查询通过");
         passedTests++;
     } catch (e) {
@@ -280,7 +279,6 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
             .project(['users.username', 'o.order_date', 'p.product_name']);
 
         let result = queryBuilder.toSQL();
-        console.log("SQL:", result.sql);
         logSuccess("✔ Test Q20 - 多个链表查询（多个 JOIN）通过");
         passedTests++;
     } catch (e) {
