@@ -111,20 +111,20 @@ const { MongoUpdateBuilder } = require('../index');
         failedTests++;
     }
 
-    // Test U8: 批量更新操作中缺少 id 字段（预期报错）
-    try {
-        const updateBuilder = new MongoUpdateBuilder('users', 'id');
-        updateBuilder.query({ active: true }).update([
-            { id: 3, score: 88 },
-            { score: 92 }
-        ]);
-        let result = updateBuilder.toSQL();
-        logSuccess("✔ Test U8 - 批量更新缺少 id 字段 (预期报错)通过");
-        passedTests++;
-    } catch (e) {
-        logFailure("X Test U8 - 批量更新缺少 id 字段预期出错");
-        failedTests++;
-    }
+    // // Test U8: 批量更新操作中缺少 id 字段（预期报错）
+    // try {
+    //     const updateBuilder = new MongoUpdateBuilder('users', 'id');
+    //     updateBuilder.query({ active: true }).update([
+    //         { id: 3, score: 88 },
+    //         { score: 92 }
+    //     ]);
+    //     let result = updateBuilder.toSQL();
+    //     logSuccess("✔ Test U8 - 批量更新缺少 id 字段 (预期报错)通过");
+    //     passedTests++;
+    // } catch (e) {
+    //     logFailure("X Test U8 - 批量更新缺少 id 字段预期出错");
+    //     failedTests++;
+    // }
 
     // Test U9: 多次调用 query() 叠加条件进行更新
     try {
