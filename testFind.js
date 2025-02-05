@@ -23,7 +23,7 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
     try {
         const queryBuilder = new MongoQueryBuilder('users');
         queryBuilder.query({ username: 'john_doe' });
-        let result = await queryBuilder.toSQL();
+        let result = queryBuilder.toSQL();
         logSuccess("✔ Test Q1 - 简单查询通过");
         passedTests++;
     } catch (e) {
@@ -35,7 +35,7 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
     try {
         const queryBuilder = new MongoQueryBuilder('users');
         queryBuilder.query({ username: 'alice' }).project(['username', 'email']);
-        let result = await queryBuilder.toSQL();
+        let result = queryBuilder.toSQL();
         logSuccess("✔ Test Q2 - 字段筛选查询通过");
         passedTests++;
     } catch (e) {
@@ -47,7 +47,7 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
     try {
         const queryBuilder = new MongoQueryBuilder('users');
         queryBuilder.query({ active: true }).limit(10).skip(20);
-        let result = await queryBuilder.toSQL();
+        let result = queryBuilder.toSQL();
         logSuccess("✔ Test Q3 - 分页查询通过");
         passedTests++;
     } catch (e) {
@@ -59,7 +59,7 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
     try {
         const queryBuilder = new MongoQueryBuilder('users');
         queryBuilder.query({ active: true }).sort({ age: -1 });
-        let result = await queryBuilder.toSQL();
+        let result = queryBuilder.toSQL();
         logSuccess("✔ Test Q4 - 排序查询通过");
         passedTests++;
     } catch (e) {
@@ -71,7 +71,7 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
     try {
         const queryBuilder = new MongoQueryBuilder('users');
         queryBuilder.query({ active: true }).sort({ age: 1 }).limit(5).skip(0);
-        let result = await queryBuilder.toSQL();
+        let result = queryBuilder.toSQL();
         logSuccess("✔ Test Q5 - 排序与分页查询通过");
         passedTests++;
     } catch (e) {
@@ -88,7 +88,7 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
                 { role: 'manager' }
             ]
         });
-        let result = await queryBuilder.toSQL();
+        let result = queryBuilder.toSQL();
         logSuccess("✔ Test Q6 - 多条件查询通过");
         passedTests++;
     } catch (e) {
@@ -100,7 +100,7 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
     try {
         const queryBuilder = new MongoQueryBuilder('users');
         queryBuilder.query({ username: { $regex: '^john' } });
-        let result = await queryBuilder.toSQL();
+        let result = queryBuilder.toSQL();
         logSuccess("✔ Test Q7 - 正则表达式查询通过");
         passedTests++;
     } catch (e) {
@@ -112,7 +112,7 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
     try {
         const queryBuilder = new MongoQueryBuilder('users');
         queryBuilder.query({ tags: { $in: ['developer', 'js'] } });
-        let result = await queryBuilder.toSQL();
+        let result = queryBuilder.toSQL();
         logSuccess("✔ Test Q8 - 查询数组字段通过");
         passedTests++;
     } catch (e) {
@@ -124,7 +124,7 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
     try {
         const queryBuilder = new MongoQueryBuilder('users');
         queryBuilder.query({ non_existent_field: 'value' });
-        let result = await queryBuilder.toSQL();
+        let result = queryBuilder.toSQL();
         logSuccess("✔ Test Q9 - 查询不存在的字段通过");
         passedTests++;
     } catch (e) {
@@ -136,7 +136,7 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
     try {
         const queryBuilder = new MongoQueryBuilder('users');
         queryBuilder.query({ active: true }).project(['username', 'email', 'age']);
-        let result = await queryBuilder.toSQL();
+        let result = queryBuilder.toSQL();
         logSuccess("✔ Test Q10 - 查询多个字段通过");
         passedTests++;
     } catch (e) {
@@ -148,7 +148,7 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
     try {
         const queryBuilder = new MongoQueryBuilder('users');
         queryBuilder.query({ role: 'staff' }).project(['$sum', 'salary']);
-        let result = await queryBuilder.toSQL();
+        let result = queryBuilder.toSQL();
         logSuccess("✔ Test Q11 - 聚合查询通过");
         passedTests++;
     } catch (e) {
@@ -160,7 +160,7 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
     try {
         const queryBuilder = new MongoQueryBuilder('users');
         queryBuilder.query({ age: { $gte: 30, $lt: 40 } });
-        let result = await queryBuilder.toSQL();
+        let result = queryBuilder.toSQL();
         logSuccess("✔ Test Q12 - 数值范围查询通过");
         passedTests++;
     } catch (e) {
@@ -172,7 +172,7 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
     try {
         const queryBuilder = new MongoQueryBuilder('users');
         queryBuilder.query({ role: { $in: ['admin', 'manager'] } });
-        let result = await queryBuilder.toSQL();
+        let result = queryBuilder.toSQL();
         logSuccess("✔ Test Q13 - 使用 $in 查询通过");
         passedTests++;
     } catch (e) {
@@ -184,7 +184,7 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
     try {
         const queryBuilder = new MongoQueryBuilder('users');
         queryBuilder.query({ email: { $exists: true } });
-        let result = await queryBuilder.toSQL();
+        let result = queryBuilder.toSQL();
         logSuccess("✔ Test Q14 - 使用 $exists 查询通过");
         passedTests++;
     } catch (e) {
@@ -201,7 +201,7 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
             .limit(5)               // 限制条数
             .skip(10);              // 偏移量
 
-        let result = await queryBuilder.toSQL();
+        let result = queryBuilder.toSQL();
         console.log("SQL:", result.sql);
         logSuccess("✔ Test Q15 - 分页与排序查询通过");
         passedTests++;
@@ -214,7 +214,7 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
     try {
         const queryBuilder = new MongoQueryBuilder('users');
         queryBuilder.query({ tags: { $size: 2 } });
-        let result = await queryBuilder.toSQL();
+        let result = queryBuilder.toSQL();
         logSuccess("✔ Test Q16 - 使用 $size 查询数组长度通过");
         passedTests++;
     } catch (e) {
@@ -226,7 +226,7 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
     try {
         const queryBuilder = new MongoQueryBuilder('users');
         queryBuilder.query({ active: true }).sort({ age: -1, username: 1 });
-        let result = await queryBuilder.toSQL();
+        let result = queryBuilder.toSQL();
         logSuccess("✔ Test Q17 - 排序多个字段查询通过");
         passedTests++;
     } catch (e) {
@@ -238,7 +238,7 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
     try {
         const queryBuilder = new MongoQueryBuilder('users');
         queryBuilder.query({ 'address.city': 'New York' });
-        let result = await queryBuilder.toSQL();
+        let result = queryBuilder.toSQL();
         logSuccess("✔ Test Q18 - 使用嵌套字段查询通过");
         passedTests++;
     } catch (e) {
@@ -250,7 +250,7 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
     try {
         const queryBuilder = new MongoQueryBuilder('users');
         queryBuilder.query({ preferences: { color: 'blue' } });
-        let result = await queryBuilder.toSQL();
+        let result = queryBuilder.toSQL();
         logSuccess("✔ Test Q19 - 查询 JSON 数据类型字段通过");
         passedTests++;
     } catch (e) {
@@ -261,14 +261,30 @@ const { MongoQueryBuilder, SQLGenerationError } = require('./index');
     // Test Q20: 联接查询
     try {
         const queryBuilder = new MongoQueryBuilder('users');
-        queryBuilder.query({ role: 'admin' }).join([
-            { table: 'orders', on: 'users.id = orders.user_id' }
-        ]);
-        let result = await queryBuilder.toSQL();
-        logSuccess("✔ Test Q20 - 联接查询通过");
+        queryBuilder
+            .query({ 'users.active': true })
+            .join([
+                {
+                    tableName: 'orders',
+                    joinType: 'INNER JOIN',
+                    on: 'users.id = orders.user_id',
+                    alias: 'o'
+                },
+                {
+                    tableName: 'products',
+                    joinType: 'LEFT JOIN',
+                    on: 'orders.product_id = products.id',
+                    alias: 'p'
+                }
+            ])
+            .project(['users.username', 'o.order_date', 'p.product_name']);
+
+        let result = queryBuilder.toSQL();
+        console.log("SQL:", result.sql);
+        logSuccess("✔ Test Q20 - 多个链表查询（多个 JOIN）通过");
         passedTests++;
     } catch (e) {
-        logFailure("X Test Q20 - 联接查询失败");
+        logFailure("X Test Q20 - 多个链表查询（多个 JOIN）失败");
         failedTests++;
     }
 
