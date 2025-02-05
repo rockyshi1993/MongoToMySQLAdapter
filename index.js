@@ -1,12 +1,73 @@
 "use strict";
 
-// DEBUG 开关，调试时置为 true（生产环境可置为 false）
-const DEBUG = true;
-function logDebug(...args) {
-    if (DEBUG) console.debug(...args);
+/* ============================================================
+   配置与全局日志、错误、插件定义
+============================================================ */
+const Config = {
+    LOG_LEVEL: process.env.LOG_LEVEL || "DEBUG"
+};
+
+const LOG_LEVELS = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
+let currentLogLevel = LOG_LEVELS[Config.LOG_LEVEL] || LOG_LEVELS.DEBUG;
+
+/**
+ * 日志管理器：统一处理不同日志级别的输出
+ */
+const Logger = {
+    setLevel(levelStr) {
+        currentLogLevel = LOG_LEVELS[levelStr] || LOG_LEVELS.DEBUG;
+    },
+    debug: (...args) => {
+        if (currentLogLevel <= LOG_LEVELS.DEBUG) console.debug("[DEBUG]", ...args);
+    },
+    info: (...args) => {
+        if (currentLogLevel <= LOG_LEVELS.INFO) console.info("[INFO]", ...args);
+    },
+    warn: (...args) => {
+        if (currentLogLevel <= LOG_LEVELS.WARN) console.warn("[WARN]", ...args);
+    },
+    error: (...args) => {
+        if (currentLogLevel <= LOG_LEVELS.ERROR) console.error("[ERROR]", ...args);
+    }
+};
+
+/**
+ * 简单日志封装函数
+ */
+function log(level, message, ...args) {
+    if (currentLogLevel <= LOG_LEVELS[level]) {
+        console[level](`[${level}]`, message, ...args);
+    }
 }
 
-// 定义 MongoDB 操作符与 MySQL 操作符的映射
+/**
+ * 错误类型定义
+ */
+class QueryParseError extends Error {
+    constructor(message, context) {
+        super(`[QueryParseError] ${message} | Context: ${context}`);
+        this.name = "QueryParseError";
+    }
+}
+
+class SQLGenerationError extends Error {
+    constructor(message, context) {
+        super(`[SQLGenerationError] ${message} | Context: ${context}`);
+        this.name = "SQLGenerationError";
+    }
+}
+
+/**
+ * 统一错误处理函数
+ */
+function handleError(errMsg, context, ErrorType) {
+    Logger.error(`[${ErrorType.name}] ${errMsg} | Context: ${context}`);
+    throw new ErrorType(errMsg, context);
+}
+
+/**
+ * 操作符映射：MongoDB 与 MySQL 之间的对照
+ */
 const OPERATORS_MYSQL = {
     $eq: '=',
     $ne: '<>',
@@ -23,47 +84,74 @@ const OPERATORS_MYSQL = {
     $like: 'LIKE'
 };
 
-/* ============================================================
-   SELECT 查询转换及辅助函数
-============================================================*/
-
 /**
- * parseMongoQuery(query, params)
- * 将 MongoDB 查询对象转换为 SQL WHERE 子句字符串，并收集参数。
- *
- * @param {Object} query - MongoDB 查询对象，例如 { age: { $gt: 18 } }
- * @param {Array} params - 用于收集参数的数组
- * @returns {String} SQL 条件字符串（不含 "WHERE"）
+ * 插件扩展机制：支持自定义操作符转换
  */
-function parseMongoQuery(query, params) {
+const OperatorPlugins = []; // 改为数组存放插件对象
+
+class OperatorPlugin {
+    constructor(operator, handler) {
+        this.operator = operator;
+        this.handler = handler;
+    }
+    apply(field, opValue, conditions, params, context) {
+        this.handler(field, opValue, conditions, params, context);
+    }
+}
+
+function registerOperatorPlugin(operator, handler) {
+    OperatorPlugins.push(new OperatorPlugin(operator, handler));
+}
+
+/* ============================================================
+   公共 SQL 生成函数
+============================================================ */
+/**
+ * 根据传入配置拼接 SQL 语句
+ * @param {Object} queryConfig
+ * @returns {{sql: string, params: Array}}
+ */
+function generateSQL(queryConfig) {
+    let { selectClause, whereClause, joinClause, sortClause, limitClause, offsetClause, params, tableName } = queryConfig;
+    let sql = `SELECT ${selectClause} FROM ${tableName}`;
+    if (joinClause) sql += joinClause;
+    if (whereClause) sql += ` WHERE ${whereClause}`;
+    if (sortClause) sql += ` ORDER BY ${sortClause}`;
+    if (limitClause) sql += ` LIMIT ${limitClause}`;
+    if (offsetClause) sql += ` OFFSET ${offsetClause}`;
+    return { sql, params };
+}
+
+/* ============================================================
+   MongoDB 查询转换为 MySQL 查询函数
+============================================================ */
+function parseMongoQuery(query, params, context = "root") {
     let conditions = [];
     for (let key in query) {
         const value = query[key];
         try {
             if (key.startsWith('$')) {
-                logDebug("处理逻辑操作符:", key, value);
-                handleLogicalOperators(key, value, conditions, params);
+                Logger.debug(`处理逻辑操作符 (${context}):`, key, value);
+                handleLogicalOperators(key, value, conditions, params, context);
             } else {
                 if (value instanceof SubQuery) {
-                    // 例如：{ id: { $in: subQuery } }
-                    logDebug("检测到子查询在字段:", key);
+                    Logger.debug(`子查询检测 (${context})，字段:`, key);
                     const subResult = value.toSQL();
                     conditions.push(`${key} IN ${subResult}`);
                     params.push(...value.getParams());
-                } else if (typeof value === 'object' && !Array.isArray(value)) {
+                } else if (typeof value === 'object' && !Array.isArray(value) && value !== null) {
                     let fieldConds = [];
                     for (let op in value) {
                         if (op.startsWith('$')) {
-                            // 如果操作符是 $in 且值为 SubQuery，特殊处理
                             if (op === "$in" && value[op] instanceof SubQuery) {
-                                logDebug("检测到子查询 in $in operator:", key);
+                                Logger.debug(`子查询 in 操作符 (${context})，字段:`, key);
                                 const subResult = value[op].toSQL();
                                 fieldConds.push(`${key} IN ${subResult}`);
                                 params.push(...value[op].getParams());
                             } else if (['$in', '$nin', '$all'].includes(op)) {
-                                handleArrayOperators(key, value[op], op, fieldConds, params);
+                                handleArrayOperators(key, value[op], op, fieldConds, params, context);
                             } else {
-                                handleOperator(key, value[op], op, fieldConds, params);
+                                handleOperator(key, value[op], op, fieldConds, params, context);
                             }
                         } else {
                             fieldConds.push(`${key} = ?`);
@@ -81,31 +169,37 @@ function parseMongoQuery(query, params) {
                 }
             }
         } catch (e) {
-            console.error(`Error processing key "${key}": ${e.message}`);
-            throw e;
+            const errMsg = `Error processing key "${key}" in context "${context}": ${e.message}`;
+            Logger.error(errMsg);
+            throw new QueryParseError(e.message, context);
         }
     }
     const result = conditions.length ? conditions.join(" AND ") : "1=1";
-    logDebug("生成的 WHERE 子句:", result, "参数:", params);
+    Logger.debug(`生成的 WHERE 子句 (${context}):`, result, "参数:", params);
     return result;
 }
 
-function handleLogicalOperators(operator, value, conditions, params) {
+function handleLogicalOperators(operator, value, conditions, params, context) {
     if (!Array.isArray(value) || value.length === 0) {
         conditions.push(operator === '$and' ? "1=1" : "1=0");
         return;
     }
-    let subConds = value.map(subQuery => "(" + parseMongoQuery(subQuery, params) + ")");
+    let subConds = value.map((subQuery, idx) =>
+        "(" + parseMongoQuery(subQuery, params, `${context}->${operator}[${idx}]`) + ")"
+    );
     if (operator === '$nor') {
         conditions.push("NOT (" + subConds.join(" OR ") + ")");
     } else {
         conditions.push("(" + subConds.join(" " + (OPERATORS_MYSQL[operator] || operator) + " ") + ")");
     }
-    logDebug(`逻辑操作符 ${operator} 处理后:`, conditions[conditions.length - 1]);
+    Logger.debug(`逻辑操作符处理 (${context}) ${operator}:`, conditions[conditions.length - 1]);
 }
 
-function handleArrayOperators(field, values, operator, conditions, params) {
-    if (!Array.isArray(values) || values.length === 0) return;
+function handleArrayOperators(field, values, operator, conditions, params, context) {
+    if (!Array.isArray(values) || values.length === 0) {
+        Logger.warn(`数组操作符 (${context}) ${operator} 的值为空，跳过字段 ${field}`);
+        return;
+    }
     if (values.some(v => v instanceof SubQuery)) {
         let subQueries = values.map(v => {
             if (v instanceof SubQuery) {
@@ -132,15 +226,23 @@ function handleArrayOperators(field, values, operator, conditions, params) {
             conditions.push("(" + subConds.join(" AND ") + ")");
         }
     }
-    logDebug(`数组操作符 ${operator} 处理后 for field ${field}:`, conditions[conditions.length - 1]);
+    Logger.debug(`数组操作符处理 (${context}) ${operator} for field ${field}:`, conditions[conditions.length - 1]);
 }
 
-function handleOperator(field, opValue, operator, conditions, params) {
+function handleOperator(field, opValue, operator, conditions, params, context) {
+    // 尝试使用插件处理
+    for (const plugin of OperatorPlugins) {
+        if (plugin.operator === operator) {
+            plugin.apply(field, opValue, conditions, params, context);
+            Logger.debug(`插件处理操作符 (${context}) ${operator} for field ${field}:`, conditions[conditions.length - 1]);
+            return;
+        }
+    }
     if (opValue instanceof SubQuery) {
         const subSql = opValue.toSQL();
         conditions.push(`${field} IN ${subSql}`);
         params.push(...opValue.getParams());
-        logDebug(`子查询处理 for field ${field}:`, subSql);
+        Logger.debug(`子查询处理 (${context}) for field ${field}:`, subSql);
         return;
     }
     switch (operator) {
@@ -166,35 +268,31 @@ function handleOperator(field, opValue, operator, conditions, params) {
         default:
             let sqlOperator = OPERATORS_MYSQL[operator];
             if (!sqlOperator) {
-                throw new Error(`Unsupported operator: ${operator} for field ${field}`);
+                handleError(`Unsupported operator "${operator}" for field "${field}"`, context, SQLGenerationError);
             }
             conditions.push(`${field} ${sqlOperator} ?`);
             params.push(opValue);
     }
-    logDebug(`操作符 ${operator} 处理后 for field ${field}:`, conditions[conditions.length - 1]);
-}
-
-/**
- * mongoToMySQL(query, tableName, limit, orderBy)
- * 将 MongoDB 查询对象转换为 SQL SELECT 语句及参数数组。
- *
- * @param {Object} query - 查询条件
- * @param {String} tableName - 表名
- * @param {Number} limit - 返回记录数限制（默认为 10）
- * @param {String} orderBy - 排序条件（默认为 'id DESC'）
- * @returns {Object} { sql, params }
- */
-function mongoToMySQL(query, tableName, limit = 10, orderBy = 'id DESC') {
-    let params = [];
-    const whereClause = parseMongoQuery(query, params);
-    const sql = `SELECT * FROM ${tableName} WHERE ${whereClause} ORDER BY ${orderBy} LIMIT ${limit}`;
-    logDebug("基本查询 SQL:", sql, "参数:", params);
-    return { sql, params };
+    Logger.debug(`操作符处理 (${context}) ${operator} for field ${field}:`, conditions[conditions.length - 1]);
 }
 
 /* ============================================================
-   连表查询与 Projection 解析部分
-============================================================*/
+   基本查询与 Join 查询生成函数
+============================================================ */
+/**
+ * 基本的 SELECT 查询转换函数
+ */
+function mongoToMySQL(query, tableName, limit = 10, orderBy = 'id DESC') {
+    let params = [];
+    const whereClause = parseMongoQuery(query, params, "mongoToMySQL");
+    const sql = `SELECT * FROM ${tableName} WHERE ${whereClause} ORDER BY ${orderBy} LIMIT ${limit}`;
+    Logger.info("基本查询 SQL:", sql, "参数:", params);
+    return { sql, params };
+}
+
+/**
+ * 处理连表查询的辅助函数
+ */
 function prepareJoinMappings(joinConfigs) {
     const mappings = {};
     joinConfigs.forEach(join => {
@@ -206,7 +304,7 @@ function prepareJoinMappings(joinConfigs) {
             alias: alias
         };
     });
-    logDebug("生成的连表映射:", mappings);
+    Logger.debug("连表映射生成:", mappings);
     return mappings;
 }
 
@@ -227,30 +325,19 @@ function parseProjectStageWithJoinsOptimized(projectFields, joinMappings, mainTa
         }
     });
     const result = fields.join(", ");
-    logDebug("生成的投影 SELECT 片段:", result);
+    Logger.debug("生成的投影 SELECT 片段:", result);
     return result;
 }
 
 function generateJoinClause(joinConfigs) {
     const joinClause = joinConfigs.map(join => {
-        const aliasPart = join.alias ? ('AS ' + join.alias) : '';
-        return ` ${join.joinType} ${join.tableName} ${aliasPart} ON ${join.on}`;
+        const aliasPart = join.alias ? (' AS ' + join.alias) : '';
+        return ` ${join.joinType} ${join.tableName}${aliasPart} ON ${join.on}`;
     }).join(" ");
-    logDebug("生成的 JOIN 子句:", joinClause);
+    Logger.debug("生成的 JOIN 子句:", joinClause);
     return joinClause;
 }
 
-/**
- * mongoToMySQLWithJoinsOptimized(query, tableName, joinConfigs, limit, orderBy)
- * 生成包含连表查询的 SQL 语句。
- *
- * @param {Object} query - 包含查询条件的 MongoDB 查询对象（可包含 $project 阶段）
- * @param {String} tableName - 主表名称
- * @param {Array} joinConfigs - 连表配置数组
- * @param {Number} limit - 记录数限制
- * @param {String} orderBy - 排序条件
- * @returns {Object} { sql, params }
- */
 function mongoToMySQLWithJoinsOptimized(query, tableName, joinConfigs = [], limit = 10, orderBy = 'id DESC') {
     let params = [];
     const joinMappings = prepareJoinMappings(joinConfigs);
@@ -259,27 +346,27 @@ function mongoToMySQLWithJoinsOptimized(query, tableName, joinConfigs = [], limi
         selectClause = parseProjectStageWithJoinsOptimized(query.$project, joinMappings, tableName);
         delete query.$project;
     }
-    const whereClause = parseMongoQuery(query, params);
+    const whereClause = parseMongoQuery(query, params, "mongoToMySQLWithJoinsOptimized");
     const joinClause = generateJoinClause(joinConfigs);
     const sql = `SELECT ${selectClause} FROM ${tableName}${joinClause} WHERE ${whereClause} ORDER BY ${orderBy} LIMIT ${limit}`;
-    logDebug("生成的连表查询 SQL:", sql, "参数:", params);
+    Logger.info("连表查询 SQL:", sql, "参数:", params);
     return { sql, params };
 }
 
 /* ============================================================
    子查询支持
-============================================================*/
-/**
- * SubQuery 类
- * 用于构造子查询，将 MongoQueryBuilder 生成的 SQL 嵌入到主查询中。
- */
+============================================================ */
 class SubQuery {
     constructor(queryBuilder) {
         this.queryBuilder = queryBuilder;
+        this.cachedSQL = null;
     }
     toSQL() {
-        let result = this.queryBuilder.toSQL();
-        return "(" + result.sql + ")";
+        if (!this.cachedSQL) {
+            const result = this.queryBuilder.toSQL();
+            this.cachedSQL = "(" + result.sql + ")";
+        }
+        return this.cachedSQL;
     }
     getParams() {
         return this.queryBuilder.toSQL().params;
@@ -288,18 +375,11 @@ class SubQuery {
 
 /* ============================================================
    聚合查询支持
-============================================================*/
-/**
- * parseGroupStage(groupObj)
- * 解析 $group 阶段对象，生成 SELECT 字段部分和 GROUP BY 子句。
- *
- * @param {Object} groupObj - 例如 { _id: "$department", total: { $sum: "$salary" } }
- * @returns {Object} { selectClause, groupByClause, havingClause }
- */
+============================================================ */
 function parseGroupStage(groupObj) {
     let selectParts = [];
     let groupByParts = [];
-    let havingParts = [];
+    let havingParts = []; // 暂未处理 HAVING
     if (groupObj._id) {
         if (typeof groupObj._id === "string" && groupObj._id.startsWith("$")) {
             const field = groupObj._id.substring(1);
@@ -329,14 +409,11 @@ function parseGroupStage(groupObj) {
                 sqlFunc = "MAX";
                 break;
             default:
-                throw new Error("不支持的聚合操作符: " + operator);
+                handleError("不支持的聚合操作符: " + operator, "parseGroupStage", SQLGenerationError);
         }
-        let operandStr = "";
-        if (typeof operand === "string" && operand.startsWith("$")) {
-            operandStr = operand.substring(1);
-        } else {
-            operandStr = operand;
-        }
+        let operandStr = (typeof operand === "string" && operand.startsWith("$"))
+            ? operand.substring(1)
+            : operand;
         selectParts.push(`${sqlFunc}(${operandStr}) AS ${key}`);
     }
     return {
@@ -346,14 +423,11 @@ function parseGroupStage(groupObj) {
     };
 }
 
-/**
- * MongoAggregationBuilder 类
- * 构造 MongoDB 风格的聚合查询管道，生成对应的 SQL 语句。
- */
 class MongoAggregationBuilder {
     constructor(tableName) {
         this.tableName = tableName;
         this.pipeline = [];
+        this.joinClause = ""; // 用于 $lookup 生成 JOIN 子句
     }
     match(query) {
         this.pipeline.push({ $match: query });
@@ -379,6 +453,14 @@ class MongoAggregationBuilder {
         this.pipeline.push({ $skip: n });
         return this;
     }
+    lookup({ from, localField, foreignField, as }) {
+        this.pipeline.push({ $lookup: { from, localField, foreignField, as } });
+        return this;
+    }
+    unwind(field) {
+        this.pipeline.push({ $unwind: field });
+        return this;
+    }
     toSQL() {
         let params = [];
         let whereClause = "";
@@ -388,38 +470,47 @@ class MongoAggregationBuilder {
         let orderClause = "";
         let limitClause = "";
         let offsetClause = "";
+        let comments = []; // 用于保存 $unwind 等阶段的注释
+
+        let sql = "SELECT " + selectClause + " FROM " + this.tableName;
 
         for (let stage of this.pipeline) {
             if (stage.$match) {
-                whereClause = parseMongoQuery(stage.$match, params);
+                whereClause += parseMongoQuery(stage.$match, params, "$match");
             } else if (stage.$group) {
                 const groupResult = parseGroupStage(stage.$group);
                 selectClause = groupResult.selectClause;
                 groupClause = groupResult.groupByClause;
                 havingClause = groupResult.havingClause;
             } else if (stage.$sort) {
-                if (typeof stage.$sort === "object") {
-                    let sortArr = [];
-                    for (let key in stage.$sort) {
-                        let direction = stage.$sort[key] === -1 ? "DESC" : "ASC";
-                        sortArr.push(`${key} ${direction}`);
-                    }
-                    orderClause = sortArr.join(", ");
-                } else {
-                    orderClause = stage.$sort;
+                let sortArr = [];
+                for (let key in stage.$sort) {
+                    let direction = stage.$sort[key] === -1 ? "DESC" : "ASC";
+                    sortArr.push(`${key} ${direction}`);
                 }
+                orderClause = sortArr.join(", ");
             } else if (stage.$limit) {
                 limitClause = stage.$limit;
             } else if (stage.$skip) {
                 offsetClause = stage.$skip;
-            } else if (stage.$project) {
-                if (!groupClause && Array.isArray(stage.$project)) {
-                    selectClause = parseProjectStageWithJoinsOptimized(stage.$project, {}, this.tableName);
-                }
+            } else if (stage.$lookup) {
+                const { from, localField, foreignField, as } = stage.$lookup;
+                this.joinClause += ` LEFT JOIN ${from} AS ${as} ON ${this.tableName}.${localField} = ${as}.${foreignField}`;
+            } else if (stage.$unwind) {
+                comments.push(`/* UNWIND(${stage.$unwind}) */`);
             }
         }
 
-        let sql = "SELECT " + selectClause + " FROM " + this.tableName;
+        if (groupClause) {
+            sql = "SELECT " + selectClause + " FROM " + this.tableName;
+        }
+
+        if (this.joinClause) {
+            sql += this.joinClause;
+        }
+        if (comments.length > 0) {
+            sql += " " + comments.join(" ");
+        }
         if (whereClause) {
             sql += " WHERE " + whereClause;
         }
@@ -440,46 +531,42 @@ class MongoAggregationBuilder {
         } else if (offsetClause) {
             sql += " LIMIT 18446744073709551615 OFFSET " + offsetClause;
         }
-        logDebug("聚合查询生成的 SQL:", sql, "参数:", params);
+
+        Logger.info("生成的 SQL:", sql, "参数:", params);
         return { sql, params };
     }
 }
 
 /* ============================================================
    更新、删除与新增支持
-============================================================*/
-/**
- * MongoUpdateBuilder 类
- * 支持固定更新（传入对象，默认视为 $set，可明确使用更新操作符）和批量更新（传入数组，每个对象各自更新不同数据，必须包含唯一索引字段）。
- * 可调用 .single() 限制只更新第一条匹配记录。
- */
+============================================================ */
 class MongoUpdateBuilder {
     constructor(tableName, idField = "id") {
         this.tableName = tableName;
         this.idField = idField;
         this.dataObj = null;
         this.dataArray = null;
-        this.filter = {}; // 用 filter 存储查询条件
+        this.filter = {};
         this.singleUpdate = false;
     }
     update(updateData) {
         if (Array.isArray(updateData)) {
             updateData.forEach(obj => {
                 if (!obj.hasOwnProperty(this.idField)) {
-                    throw new Error(`每个更新对象必须包含 '${this.idField}' 字段`);
+                    handleError(`每个更新对象必须包含 '${this.idField}' 字段`, "MongoUpdateBuilder", SQLGenerationError);
                 }
             });
             this.dataArray = updateData;
             this.dataObj = null;
         } else if (typeof updateData === 'object' && updateData !== null) {
-            if (Object.keys(updateData).some(key => key.startsWith('$'))) {
-                this.dataObj = updateData;
-            } else {
+            if (Object.keys(updateData).every(key => !key.startsWith('$'))) {
                 this.dataObj = { $set: updateData };
+            } else {
+                this.dataObj = updateData;
             }
             this.dataArray = null;
         } else {
-            throw new Error("更新数据必须为对象或数组。");
+            handleError("更新数据必须为对象或数组。", "MongoUpdateBuilder", SQLGenerationError);
         }
         return this;
     }
@@ -500,7 +587,7 @@ class MongoUpdateBuilder {
     }
     toSQL() {
         if (Object.keys(this.filter).length === 0) {
-            throw new Error("更新操作必须指定查询条件，防止误更新所有记录。");
+            handleError("更新操作必须指定查询条件，防止误更新所有记录。", "MongoUpdateBuilder", SQLGenerationError);
         }
         let params = [];
         let sql = "";
@@ -533,18 +620,18 @@ class MongoUpdateBuilder {
                         }
                         break;
                     default:
-                        throw new Error("不支持的更新操作符: " + op);
+                        handleError("不支持的更新操作符: " + op, "MongoUpdateBuilder", SQLGenerationError);
                 }
             }
             if (setClauses.length === 0) {
-                throw new Error("未指定更新字段。");
+                handleError("未指定更新字段。", "MongoUpdateBuilder", SQLGenerationError);
             }
             sql = `UPDATE ${this.tableName} SET ${setClauses.join(", ")}`;
-            let whereClause = parseMongoQuery(this.filter, params);
+            let whereClause = parseMongoQuery(this.filter, params, "UPDATE");
             sql += ` WHERE ${whereClause}`;
         } else if (this.dataArray) {
             if (this.dataArray.length === 0) {
-                throw new Error("未指定更新对象。");
+                handleError("未指定更新对象。", "MongoUpdateBuilder", SQLGenerationError);
             }
             let updateColumns = new Set();
             this.dataArray.forEach(obj => {
@@ -577,32 +664,27 @@ class MongoUpdateBuilder {
             const placeholders = ids.map(() => "?").join(", ");
             let bulkWhereClause = `${this.idField} IN (${placeholders})`;
             let extraParams = [];
-            let extraCondition = parseMongoQuery(this.filter, extraParams);
+            let extraCondition = parseMongoQuery(this.filter, extraParams, "BULK_UPDATE");
             if (extraCondition !== "1=1") {
                 bulkWhereClause += ` AND (${extraCondition})`;
             }
-            sql = `UPDATE ${this.tableName} SET ${setClauses.join(", ")}` +
-                ` WHERE ${bulkWhereClause}`;
+            sql = `UPDATE ${this.tableName} SET ${setClauses.join(", ")} WHERE ${bulkWhereClause}`;
             params = caseParams.concat(ids, extraParams);
         } else {
-            throw new Error("未指定更新数据。");
+            handleError("未指定更新数据。", "MongoUpdateBuilder", SQLGenerationError);
         }
         if (this.singleUpdate) {
             sql += " LIMIT 1";
         }
-        logDebug("生成的 UPDATE SQL:", sql, "参数:", params);
+        Logger.info("生成的 UPDATE SQL:", sql, "参数:", params);
         return { sql, params };
     }
 }
 
-/**
- * MongoDeleteBuilder 类
- * 构造 DELETE 语句，默认删除所有匹配记录；调用 .single() 后仅删除第一条记录。
- */
 class MongoDeleteBuilder {
     constructor(tableName) {
         this.tableName = tableName;
-        this.filter = {}; // 用 filter 存储删除条件
+        this.filter = {};
         this.singleDelete = false;
     }
     query(queryObj) {
@@ -622,97 +704,91 @@ class MongoDeleteBuilder {
     }
     toSQL() {
         if (Object.keys(this.filter).length === 0) {
-            throw new Error("删除操作必须指定查询条件，防止误删除所有记录。");
+            handleError("删除操作必须指定查询条件，防止误删除所有记录。", "MongoDeleteBuilder", SQLGenerationError);
         }
         let params = [];
-        let whereClause = parseMongoQuery(this.filter, params);
+        let whereClause = parseMongoQuery(this.filter, params, "DELETE");
         let sql = `DELETE FROM ${this.tableName} WHERE ${whereClause}`;
         if (this.singleDelete) {
             sql += " LIMIT 1";
         }
-        logDebug("生成的 DELETE SQL:", sql, "参数:", params);
+        Logger.info("生成的 DELETE SQL:", sql, "参数:", params);
         return { sql, params };
     }
 }
 
-/**
- * MongoInsertBuilder 类
- * 支持单条插入和批量插入，并支持 upsert 操作。
- * 单条插入使用 .insertOne()，批量插入使用 .insertMany()。
- */
 class MongoInsertBuilder {
     constructor(tableName) {
         this.tableName = tableName;
-        this.doc = null;
-        this.docs = [];
-        this.upsertEnabled = false;
-        this.upsertFields = null;
+        this.documents = [];
     }
+
+    // 插入一条记录
     insertOne(doc) {
-        this.doc = doc;
-        return this;
-    }
-    insertMany(docs) {
-        this.docs = docs;
-        return this;
-    }
-    upsert(enable = true, fields = null) {
-        this.upsertEnabled = enable;
-        this.upsertFields = fields;
-        return this;
-    }
-    toSQL() {
-        if (this.doc) {
-            const keys = Object.keys(this.doc);
-            const columns = keys.join(", ");
-            const placeholders = keys.map(() => "?").join(", ");
-            let sql = `INSERT INTO ${this.tableName} (${columns}) VALUES (${placeholders})`;
-            let params = keys.map(key => this.doc[key]);
-            if (this.upsertEnabled) {
-                const updateFields = this.upsertFields || keys;
-                const updateClause = updateFields.map(col => `${col} = VALUES(${col})`).join(", ");
-                sql += ` ON DUPLICATE KEY UPDATE ${updateClause}`;
+        // 检查文档中的字段，处理 JSON 数据类型
+        for (let key in doc) {
+            if (typeof doc[key] === 'object' && doc[key] !== null) {
+                // 对象或者数组，转换为 JSON 字符串
+                doc[key] = JSON.stringify(doc[key]);
             }
-            logDebug("生成的单条 INSERT SQL:", sql, "参数:", params);
-            return { sql, params };
-        } else if (this.docs && this.docs.length > 0) {
-            const keys = Object.keys(this.docs[0]);
-            const columns = keys.join(", ");
-            const rowPlaceholders = "(" + keys.map(() => "?").join(", ") + ")";
-            let sql = `INSERT INTO ${this.tableName} (${columns}) VALUES ${this.docs.map(() => rowPlaceholders).join(", ")}`;
-            let params = [];
-            this.docs.forEach(doc => {
-                keys.forEach(key => {
-                    params.push(doc[key]);
-                });
-            });
-            if (this.upsertEnabled) {
-                const updateFields = this.upsertFields || keys;
-                const updateClause = updateFields.map(col => `${col} = VALUES(${col})`).join(", ");
-                sql += ` ON DUPLICATE KEY UPDATE ${updateClause}`;
-            }
-            logDebug("生成的批量 INSERT SQL:", sql, "参数:", params);
-            return { sql, params };
-        } else {
-            throw new Error("未指定插入的文档。");
         }
+        this.documents.push(doc);
+        return this;
+    }
+
+    // 插入多条记录
+    insertMany(docs) {
+        docs.forEach(doc => {
+            for (let key in doc) {
+                if (typeof doc[key] === 'object' && doc[key] !== null) {
+                    // 对象或者数组，转换为 JSON 字符串
+                    doc[key] = JSON.stringify(doc[key]);
+                }
+            }
+        });
+        this.documents = [...this.documents, ...docs];
+        return this;
+    }
+
+    // 转换为 SQL
+    toSQL() {
+        if (this.documents.length === 0) {
+            throw new SQLGenerationError('没有数据进行插入', 'MongoInsertBuilder');
+        }
+
+        const columns = Object.keys(this.documents[0]);
+        const values = this.documents.map(doc => {
+            return columns.map(column => {
+                return doc[column];
+            });
+        });
+
+        const sql = `INSERT INTO ${this.tableName} (${columns.join(', ')}) VALUES ${values
+            .map(value => `(${value.map(v => (v === null ? 'NULL' : `'${v}'`)).join(', ')})`)
+            .join(', ')}`;
+
+        const params = this.documents.flatMap(doc => {
+            return columns.map(column => doc[column]);
+        });
+
+        return { sql, params };
     }
 }
 
 /* ============================================================
-   MongoQueryBuilder 类
-   构造 SELECT 查询语句，支持多条件、排序、limit 和 offset。
-============================================================*/
+   MongoQueryBuilder 类：支持链式调用构造查询
+============================================================ */
 class MongoQueryBuilder {
     constructor(tableName) {
         this.tableName = tableName;
-        this.filter = {}; // 用 filter 存储查询条件
+        this.filter = {};
         this.projection = null;
         this.joinConfigs = [];
         this.sortClause = "";
         this.limitValue = null;
         this.offsetValue = null;
     }
+
     query(queryObj) {
         if (Object.keys(this.filter).length === 0) {
             this.filter = queryObj;
@@ -724,26 +800,32 @@ class MongoQueryBuilder {
         }
         return this;
     }
+
     project(fields) {
         this.projection = fields;
         return this;
     }
+
     join(joinConfigs) {
         this.joinConfigs = joinConfigs;
         return this;
     }
+
     sort(sortBy) {
         this.sortClause = sortBy;
         return this;
     }
+
     limit(limit) {
         this.limitValue = limit;
         return this;
     }
-    offset(offset) {
-        this.offsetValue = offset;
+
+    skip(skip) {
+        this.offsetValue = skip;
         return this;
     }
+
     toSQL() {
         let params = [];
         let selectClause = "*";
@@ -754,38 +836,54 @@ class MongoQueryBuilder {
                 selectClause = parseProjectStageWithJoinsOptimized(this.projection, {}, this.tableName);
             }
         }
+
         let sql = `SELECT ${selectClause} FROM ${this.tableName}`;
+
+        // 处理 JOIN 子句
         if (this.joinConfigs && this.joinConfigs.length > 0) {
             sql += generateJoinClause(this.joinConfigs);
         }
-        const whereClause = parseMongoQuery(this.filter, params);
+
+        // 处理 WHERE 子句
+        const whereClause = parseMongoQuery(this.filter, params, "SELECT");
         if (whereClause) {
             sql += ` WHERE ${whereClause}`;
         }
+
+        // 处理排序
         if (this.sortClause) {
             sql += ` ORDER BY ${this.sortClause}`;
         }
+
+        // 处理分页
         if (this.limitValue !== null) {
             sql += ` LIMIT ${this.limitValue}`;
             if (this.offsetValue !== null) {
                 sql += ` OFFSET ${this.offsetValue}`;
             }
         } else if (this.offsetValue !== null) {
-            sql += ` LIMIT 18446744073709551615 OFFSET ${this.offsetValue}`;
+            sql += ` LIMIT 18446744073709551615 OFFSET ${this.offsetValue}`;  // 设置大范围限制
         }
-        logDebug("最终生成的 SELECT SQL:", sql, "参数:", params);
+
+        Logger.info("最终生成的 SELECT SQL:", sql, "参数:", params);
         return { sql, params };
     }
 }
 
 /* ============================================================
-   导出模块
-============================================================*/
+   模块导出
+============================================================ */
 module.exports = {
     MongoQueryBuilder,
     MongoAggregationBuilder,
     MongoUpdateBuilder,
     MongoDeleteBuilder,
     MongoInsertBuilder,
-    SubQuery
+    SubQuery,
+    registerOperatorPlugin,
+    Logger,
+    QueryParseError,
+    SQLGenerationError,
+    mongoToMySQL,
+    mongoToMySQLWithJoinsOptimized
 };
