@@ -1,0 +1,22 @@
+{
+  "name": "mongotomysqladapter",
+  "version": "1.0.0",
+  "description": "mongo查询转sql适配器",
+  "main": "MongoQueryBuilder.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rockyshi1993/MongoToMySQLAdapter.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/rockyshi1993/MongoToMySQLAdapter/issues"
+  },
+  "homepage": "https://github.com/rockyshi1993/MongoToMySQLAdapter#readme",
+  "dependencies": {
+    "mysql2": "^3.12.0"
+  }
+}
