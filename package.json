@@ -4,7 +4,7 @@
   "description": "mongo查询转sql适配器",
   "main": "MongoQueryBuilder.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "test"
   },
   "repository": {
     "type": "git",
@@ -17,6 +17,9 @@
   },
   "homepage": "https://github.com/rockyshi1993/MongoToMySQLAdapter#readme",
   "dependencies": {
-    "mysql2": "^3.12.0"
+
+  },
+  "devDependencies": {
+
   }
 }

@@ -4,7 +4,7 @@
    配置与全局日志、错误、插件定义
 ============================================================ */
 const Config = {
-    LOG_LEVEL: process.env.LOG_LEVEL || "DEBUG"
+    LOG_LEVEL: process.env.LOG_LEVEL || "ERROR"
 };
 
 const LOG_LEVELS = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
@@ -127,13 +127,37 @@ function generateSQL(queryConfig) {
 ============================================================ */
 function parseMongoQuery(query, params, context = "root") {
     let conditions = [];
+
     for (let key in query) {
         const value = query[key];
         try {
             if (key.startsWith('$')) {
                 Logger.debug(`处理逻辑操作符 (${context}):`, key, value);
-                handleLogicalOperators(key, value, conditions, params, context);
+                if (key === '$or') {
+                    // 对 $or 进行处理，避免过多的括号
+                    let orConditions = value.map((subQuery, idx) =>
+                        parseMongoQuery(subQuery, params, `${context}->OR[${idx}]`)
+                    );
+                    // 只在每个子条件外加括号，而不是整个 $or 包围
+                    conditions.push(`(${orConditions.join(" OR ")})`);
+                } else if (key === '$nor') {
+                    // 对 $nor 进行处理，生成 NOT (condition)
+                    let norConditions = value.map((subQuery, idx) =>
+                        parseMongoQuery(subQuery, params, `${context}->NOR[${idx}]`)
+                    );
+                    conditions.push(`NOT (${norConditions.join(" OR ")})`);
+                } else if (key === '$and') {
+                    // 对 $and 进行处理，避免过多的括号
+                    let andConditions = value.map((subQuery, idx) =>
+                        parseMongoQuery(subQuery, params, `${context}->AND[${idx}]`)
+                    );
+                    // 如果有多个 $and 条件，则生成 AND 连接的条件
+                    conditions.push(andConditions.join(" AND "));
+                } else {
+                    handleLogicalOperators(key, value, conditions, params, context);
+                }
             } else {
+                // 处理普通字段条件
                 if (value instanceof SubQuery) {
                     Logger.debug(`子查询检测 (${context})，字段:`, key);
                     const subResult = value.toSQL();
@@ -174,6 +198,8 @@ function parseMongoQuery(query, params, context = "root") {
             throw new QueryParseError(e.message, context);
         }
     }
+
+    // 如果没有条件，返回默认的 "1=1"（用于防止空条件）
     const result = conditions.length ? conditions.join(" AND ") : "1=1";
     Logger.debug(`生成的 WHERE 子句 (${context}):`, result, "参数:", params);
     return result;
@@ -720,58 +746,59 @@ class MongoDeleteBuilder {
 class MongoInsertBuilder {
     constructor(tableName) {
         this.tableName = tableName;
-        this.documents = [];
+        this.doc = null;
+        this.docs = [];
+        this.upsertEnabled = false;
+        this.upsertFields = null;
     }
-
-    // 插入一条记录
     insertOne(doc) {
-        // 检查文档中的字段，处理 JSON 数据类型
-        for (let key in doc) {
-            if (typeof doc[key] === 'object' && doc[key] !== null) {
-                // 对象或者数组，转换为 JSON 字符串
-                doc[key] = JSON.stringify(doc[key]);
-            }
-        }
-        this.documents.push(doc);
+        this.doc = doc;
         return this;
     }
-
-    // 插入多条记录
     insertMany(docs) {
-        docs.forEach(doc => {
-            for (let key in doc) {
-                if (typeof doc[key] === 'object' && doc[key] !== null) {
-                    // 对象或者数组，转换为 JSON 字符串
-                    doc[key] = JSON.stringify(doc[key]);
-                }
-            }
-        });
-        this.documents = [...this.documents, ...docs];
+        this.docs = docs;
         return this;
     }
-
-    // 转换为 SQL
+    upsert(enable = true, fields = null) {
+        this.upsertEnabled = enable;
+        this.upsertFields = fields;
+        return this;
+    }
     toSQL() {
-        if (this.documents.length === 0) {
-            throw new SQLGenerationError('没有数据进行插入', 'MongoInsertBuilder');
-        }
-
-        const columns = Object.keys(this.documents[0]);
-        const values = this.documents.map(doc => {
-            return columns.map(column => {
-                return doc[column];
+        if (this.doc) {
+            const keys = Object.keys(this.doc);
+            const columns = keys.join(", ");
+            const placeholders = keys.map(() => "?").join(", ");
+            let sql = `INSERT INTO ${this.tableName} (${columns}) VALUES (${placeholders})`;
+            let params = keys.map(key => this.doc[key]);
+            if (this.upsertEnabled) {
+                const updateFields = this.upsertFields || keys;
+                const updateClause = updateFields.map(col => `${col} = VALUES(${col})`).join(", ");
+                sql += ` ON DUPLICATE KEY UPDATE ${updateClause}`;
+            }
+            Logger.info("生成的单条 INSERT SQL:", sql, "参数:", params);
+            return { sql, params };
+        } else if (this.docs && this.docs.length > 0) {
+            const keys = Object.keys(this.docs[0]);
+            const columns = keys.join(", ");
+            const rowPlaceholders = "(" + keys.map(() => "?").join(", ") + ")";
+            let sql = `INSERT INTO ${this.tableName} (${columns}) VALUES ${this.docs.map(() => rowPlaceholders).join(", ")}`;
+            let params = [];
+            this.docs.forEach(doc => {
+                keys.forEach(key => {
+                    params.push(doc[key]);
+                });
             });
-        });
-
-        const sql = `INSERT INTO ${this.tableName} (${columns.join(', ')}) VALUES ${values
-            .map(value => `(${value.map(v => (v === null ? 'NULL' : `'${v}'`)).join(', ')})`)
-            .join(', ')}`;
-
-        const params = this.documents.flatMap(doc => {
-            return columns.map(column => doc[column]);
-        });
-
-        return { sql, params };
+            if (this.upsertEnabled) {
+                const updateFields = this.upsertFields || keys;
+                const updateClause = updateFields.map(col => `${col} = VALUES(${col})`).join(", ");
+                sql += ` ON DUPLICATE KEY UPDATE ${updateClause}`;
+            }
+            Logger.info("生成的批量 INSERT SQL:", sql, "参数:", params);
+            return { sql, params };
+        } else {
+            handleError("未指定插入的文档。", "MongoInsertBuilder", SQLGenerationError);
+        }
     }
 }
 
