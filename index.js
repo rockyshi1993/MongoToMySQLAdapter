@@ -501,7 +501,7 @@ function parseGroupStage(groupObj) {
         }
         let operandStr = (typeof operand === "string" && operand.startsWith("$"))
             ? operand.substring(1)
-            : operand;
+            : (operand !== undefined ? operand : "NULL");
         selectParts.push(`${sqlFunc}(${operandStr}) AS ${key}`);
     }
     return {
@@ -701,12 +701,14 @@ class MongoUpdateBuilder {
                             handleError("无效的 $set 更新操作: 不能为空", "MongoUpdateBuilder.toSQL", SQLGenerationError);
                         }
                         for (let field in updateOps.$set) {
-                            if (updateOps.$set[field] !== undefined) {
-                                setClauses.push(`${field} = ?`);
-                                params.push(updateOps.$set[field]);
+                            if (updateOps.$set[field] === undefined) {
+                                handleError(`字段 ${field} 不能设置为 undefined`, "MongoUpdateBuilder.toSQL", SQLGenerationError);
                             }
+                            setClauses.push(`${field} = ?`);
+                            params.push(updateOps.$set[field]);
                         }
                         break;
+
                     case "$inc":
                         for (let field in updateOps.$inc) {
                             setClauses.push(`${field} = ${field} + ?`);
