@@ -315,7 +315,7 @@ function handleOperator(field, opValue, operator, conditions, params, context) {
     }
     switch (operator) {
         case "$exists":
-            conditions.push(`${field} IS ${opValue ? "NOT NULL" : "NULL"} OR COALESCE(${field}, '') = ''`);
+            conditions.push(`${field} ${opValue ? "IS NOT NULL" : "IS NULL"}`);
             break;
         case '$size':
             conditions.push(`JSON_LENGTH(${field}) = ?`);
