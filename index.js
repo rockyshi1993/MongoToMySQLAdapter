@@ -3,29 +3,34 @@
 /* ============================================================
    配置与全局日志、错误、插件定义
 ============================================================ */
-const Config = {
-    LOG_LEVEL: process.env.LOG_LEVEL || "ERROR"
-};
 
 const LOG_LEVELS = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
+
+const Config = {
+    LOG_LEVEL: Object.keys(LOG_LEVELS).includes(process.env.LOG_LEVEL?.toUpperCase())
+        ? process.env.LOG_LEVEL.toUpperCase()
+        : "ERROR"
+};
+
 // 如果配置中的日志级别无效，默认使用 ERROR
 let currentLogLevel = LOG_LEVELS[Config.LOG_LEVEL] ?? LOG_LEVELS.ERROR;
 
 const Logger = {
+    enabled: true, // 允许关闭日志
     setLevel(levelStr) {
         currentLogLevel = LOG_LEVELS[levelStr] ?? LOG_LEVELS.ERROR;
     },
     debug: (...args) => {
-        if (currentLogLevel <= LOG_LEVELS.DEBUG) console.debug("[DEBUG]", ...args);
+        if (Logger.enabled && currentLogLevel <= LOG_LEVELS.DEBUG) console.debug("[DEBUG]", ...args);
     },
     info: (...args) => {
-        if (currentLogLevel <= LOG_LEVELS.INFO) console.info("[INFO]", ...args);
+        if (Logger.enabled && currentLogLevel <= LOG_LEVELS.INFO) console.info("[INFO]", ...args);
     },
     warn: (...args) => {
-        if (currentLogLevel <= LOG_LEVELS.WARN) console.warn("[WARN]", ...args);
+        if (Logger.enabled && currentLogLevel <= LOG_LEVELS.WARN) console.warn("[WARN]", ...args);
     },
     error: (...args) => {
-        if (currentLogLevel <= LOG_LEVELS.ERROR) console.error("[ERROR]", ...args);
+        if (Logger.enabled && currentLogLevel <= LOG_LEVELS.ERROR) console.error("[ERROR]", ...args);
     }
 };
 
@@ -33,10 +38,13 @@ const Logger = {
  * 简单日志封装函数
  */
 function log(level, message, ...args) {
-    if (currentLogLevel <= LOG_LEVELS[level]) {
-        console[level](`[${level}]`, message, ...args);
+    const validLevel = level?.toUpperCase();
+    if (LOG_LEVELS[validLevel] !== undefined && currentLogLevel <= LOG_LEVELS[validLevel]) {
+        const logMethod = console[validLevel.toLowerCase()] || console.log;
+        logMethod(`[${validLevel}]`, message, ...args);
     }
 }
+
 
 /**
  * 错误类型定义
@@ -59,8 +67,8 @@ class SQLGenerationError extends Error {
  * 统一错误处理函数
  */
 function handleError(errMsg, context, ErrorType) {
-    Logger.error(`[${ErrorType.name}] ${errMsg} | Context: ${context}`);
-    throw new ErrorType(errMsg, context);
+    Logger.error(`[${ErrorType.name}] ${errMsg} | Context:`, context);
+    throw new ErrorType(`${errMsg} | Context: ${JSON.stringify(context)}`);
 }
 
 /**
@@ -122,7 +130,7 @@ function generateSQL(queryConfig) {
         tableName
     } = queryConfig;
     let sql = `SELECT ${selectClause} FROM ${tableName}`;
-    if (joinClause) sql += joinClause;
+    if (joinClause) sql += ` ${joinClause}`;
     if (whereClause) sql += ` WHERE ${whereClause}`;
     if (sortClause) sql += ` ORDER BY ${sortClause}`;
     if (limitClause) sql += ` LIMIT ${limitClause}`;
@@ -145,13 +153,14 @@ function parseMongoQuery(query, params, context = "root") {
                     let orConditions = value.map((subQuery, idx) =>
                         parseMongoQuery(subQuery, params, `${context}->OR[${idx}]`)
                     ).filter(cond => cond && cond !== "1=1");
-                    if (orConditions.length) {
+
+                    if (orConditions.length > 0) {
                         conditions.push(`(${orConditions.join(" OR ")})`);
                     } else {
-                        // 若无有效条件，则始终为 false
-                        conditions.push("1=0");
+                        conditions.push("1=0"); // 修复：空 $or 应返回 `1=0`
                     }
-                } else if (key === '$nor') {
+                }
+                else if (key === '$nor') {
                     let norConditions = value.map((subQuery, idx) =>
                         parseMongoQuery(subQuery, params, `${context}->NOR[${idx}]`)
                     ).filter(cond => cond && cond !== "1=1");
@@ -237,10 +246,17 @@ function handleLogicalOperators(operator, value, conditions, params, context) {
 function handleArrayOperators(field, values, operator, conditions, params, context) {
     if (!Array.isArray(values) || values.length === 0) {
         Logger.warn(`数组操作符 (${context}) ${operator} 的值为空，跳过字段 ${field}`);
-        // 若为空数组，则生成一个始终为假的条件
-        conditions.push("0 = 1");
+        // 修复 `$in: []` 变为 `1=0`
+        if (operator === '$in') {
+            conditions.push("1=0");
+        }
+        // 修复 `$nin: []` 变为 `1=1`
+        else if (operator === '$nin') {
+            conditions.push("1=1");
+        }
         return;
     }
+
     if (values.some(v => v instanceof SubQuery)) {
         let subQueries = values.map(v => {
             if (v instanceof SubQuery) {
@@ -254,13 +270,21 @@ function handleArrayOperators(field, values, operator, conditions, params, conte
         conditions.push(`${field} IN (${subQueries.join(", ")})`);
     } else {
         if (operator === '$in') {
-            let placeholders = values.map(() => "?").join(", ");
-            conditions.push(`${field} IN (${placeholders})`);
-            params.push(...values);
+            if (values.length === 0) {
+                conditions.push("1=0");
+            } else {
+                let placeholders = values.map(() => "?").join(", ");
+                conditions.push(`${field} IN (${placeholders})`);
+                params.push(...values);
+            }
         } else if (operator === '$nin') {
-            let placeholders = values.map(() => "?").join(", ");
-            conditions.push(`${field} NOT IN (${placeholders})`);
-            params.push(...values);
+            if (values.length === 0) {
+                conditions.push("1=1");  // 修正：空 $nin 应匹配所有值
+            } else {
+                let placeholders = values.map(() => "?").join(", ");
+                conditions.push(`${field} NOT IN (${placeholders})`);
+                params.push(...values);
+            }
         } else if (operator === '$all') {
             let subConds = values.map(val => {
                 params.push(JSON.stringify(val));
@@ -269,6 +293,7 @@ function handleArrayOperators(field, values, operator, conditions, params, conte
             conditions.push("(" + subConds.join(" AND ") + ")");
         }
     }
+
     Logger.debug(`数组操作符处理 (${context}) ${operator} for field ${field}:`, conditions[conditions.length - 1]);
 }
 
@@ -289,8 +314,8 @@ function handleOperator(field, opValue, operator, conditions, params, context) {
         return;
     }
     switch (operator) {
-        case '$exists':
-            conditions.push(`${field} ${opValue ? "IS NOT NULL" : "IS NULL"}`);
+        case "$exists":
+            conditions.push(`${field} IS ${opValue ? "NOT NULL" : "NULL"} OR COALESCE(${field}, '') = ''`);
             break;
         case '$size':
             conditions.push(`JSON_LENGTH(${field}) = ?`);
@@ -547,15 +572,14 @@ class MongoAggregationBuilder {
                 groupClause = groupResult.groupByClause;
                 havingClause = groupResult.havingClause;
             } else if (stage.$project) {
-
                 if (Array.isArray(stage.$project)) {
                     if(selectClause === "*") {
                         selectClause = stage.$project.join(", ");
                     }else{
                         selectClause = `${stage.$project.join(", ")}, ${selectClause}`;
                     }
-
                 }
+
             }else if (stage.$sort) {
                 let sortArr = [];
                 for (let key in stage.$sort) {
@@ -673,8 +697,10 @@ class MongoUpdateBuilder {
             for (let op in updateOps) {
                 switch (op) {
                     case "$set":
+                        if (!updateOps.$set || Object.keys(updateOps.$set).length === 0) {
+                            handleError("无效的 $set 更新操作: 不能为空", "MongoUpdateBuilder.toSQL", SQLGenerationError);
+                        }
                         for (let field in updateOps.$set) {
-                            // 忽略 undefined 值
                             if (updateOps.$set[field] !== undefined) {
                                 setClauses.push(`${field} = ?`);
                                 params.push(updateOps.$set[field]);
@@ -688,8 +714,12 @@ class MongoUpdateBuilder {
                         }
                         break;
                     case "$unset":
-                        for (let field in updateOps.$unset) {
-                            setClauses.push(`${field} = NULL`);
+                        if (typeof updateOps.$unset === "object") {
+                            for (let field in updateOps.$unset) {
+                                setClauses.push(`${field} = NULL`);
+                            }
+                        } else {
+                            handleError("无效的 $unset 语法，应为 { field1: '', field2: '' }", "MongoUpdateBuilder", SQLGenerationError);
                         }
                         break;
                     case "$mul":
@@ -721,6 +751,9 @@ class MongoUpdateBuilder {
                 }
             });
             updateColumns = Array.from(updateColumns);
+            if (updateColumns.length === 0) {
+                handleError("批量更新时，未检测到有效字段。", "MongoUpdateBuilder", SQLGenerationError);
+            }
             let setClauses = updateColumns.map(col => {
                 let cases = this.dataArray.map(obj => {
                     if (obj.hasOwnProperty(col)) {
@@ -831,7 +864,9 @@ class MongoInsertBuilder {
             }
             Logger.info("生成的单条 INSERT SQL:", sql, "参数:", params);
             return { sql, params };
-        } else if (this.docs && this.docs.length > 0) {
+        } else if (!Array.isArray(this.docs) || this.docs.length === 0) {
+            handleError("insertMany() 需要至少一个有效的文档。", "MongoInsertBuilder", SQLGenerationError);
+        } else{
             const keys = Object.keys(this.docs[0]);
             const columns = keys.join(", ");
             const rowPlaceholders = "(" + keys.map(() => "?").join(", ") + ")";
@@ -849,8 +884,6 @@ class MongoInsertBuilder {
             }
             Logger.info("生成的批量 INSERT SQL:", sql, "参数:", params);
             return { sql, params };
-        } else {
-            handleError("未指定插入的文档。", "MongoInsertBuilder", SQLGenerationError);
         }
     }
 }
