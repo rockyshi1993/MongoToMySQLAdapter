@@ -446,7 +446,7 @@ const {
             .lookup({ from: 'users', localField: 'user_id', foreignField: 'id', as: 'user' })
             .group({ _id: '$customer_id', total: { $sum: '$amount' } });
         let res = agg.toSQL();
-        if (res.sql === "SELECT customer_id, SUM(amount) AS total FROM orders WHERE status = ? LEFT JOIN users AS user ON orders.user_id = user.id GROUP BY customer_id") {
+        if (res.sql === "SELECT customer_id AS _id, SUM(amount) AS total FROM orders LEFT JOIN users AS user ON orders.user_id = user.id WHERE status = ? GROUP BY customer_id") {
             logSuccess("✔ Test 29 - 聚合查询 $lookup通过");
             passedTests++;
         } else {
@@ -462,7 +462,7 @@ const {
             .unwind('items')
             .group({ _id: '$customer_id', total: { $sum: '$amount' } });
         let res = agg.toSQL();
-        if (res.sql === "SELECT customer_id, SUM(amount) AS total FROM orders WHERE status = ? GROUP BY customer_id /* UNWIND(items) */") {
+        if (res.sql === "SELECT customer_id AS _id, SUM(amount) AS total FROM orders /* UNWIND(items) */ WHERE status = ? GROUP BY customer_id") {
             logSuccess("✔ Test 30 - 聚合查询 $unwind通过");
             passedTests++;
         } else {
@@ -478,7 +478,7 @@ const {
             .match({ region: 'US' })
             .group({ _id: '$customer_id', total: { $sum: '$amount' } });
         let res = agg.toSQL();
-        if (res.sql === "SELECT customer_id, SUM(amount) AS total FROM orders WHERE status = ? AND region = ? GROUP BY customer_id") {
+        if (res.sql === "SELECT customer_id AS _id, SUM(amount) AS total FROM orders WHERE status = ? AND region = ? GROUP BY customer_id") {
             logSuccess("✔ Test 31 - 多重 $match通过");
             passedTests++;
         } else {
@@ -490,7 +490,7 @@ const {
     // Test 32: 聚合查询：使用 $project 阶段重新构造 SELECT
     try {
         const agg = new MongoAggregationBuilder('orders');
-        agg.project({ field1: 1, field2: 1 })
+        agg.project(['field1','field2'])
             .match({ status: 'completed' });
         let res = agg.toSQL();
         if (res.sql === "SELECT field1, field2 FROM orders WHERE status = ?") {
@@ -508,7 +508,7 @@ const {
         agg.match({ status: 'completed' })
             .limit(5);
         let res = agg.toSQL();
-        if (res.sql === "SELECT * FROM orders WHERE status = ? LIMIT ?") {
+        if (res.sql === "SELECT * FROM orders WHERE status = ? LIMIT 5") {
             logSuccess("✔ Test 33 - 聚合查询仅 $limit通过");
             passedTests++;
         } else {
@@ -523,7 +523,7 @@ const {
         agg.match({ status: 'completed' })
             .skip(3);
         let res = agg.toSQL();
-        if (res.sql === "SELECT * FROM orders WHERE status = ? LIMIT 18446744073709551615 OFFSET ?") {
+        if (res.sql === "SELECT * FROM orders WHERE status = ? LIMIT 18446744073709551615 OFFSET 3") {
             logSuccess("✔ Test 34 - 聚合查询仅 $skip通过");
             passedTests++;
         } else {
@@ -537,7 +537,7 @@ const {
         const agg = new MongoAggregationBuilder('orders');
         agg.group({ _id: '$customer_id', total: { $sum: '$amount' } });
         let res = agg.toSQL();
-        if (res.sql === "SELECT customer_id, SUM(amount) AS total FROM orders GROUP BY customer_id") {
+        if (res.sql === "SELECT customer_id AS _id, SUM(amount) AS total FROM orders GROUP BY customer_id") {
             logSuccess("✔ Test 35 - 聚合查询无 match通过");
             passedTests++;
         } else {
@@ -573,7 +573,7 @@ const {
                 max: { $max: '$amount' }
             });
         let res = agg.toSQL();
-        if (res.sql === "SELECT customer_id, SUM(amount) AS total, AVG(amount) AS avg, MIN(amount) AS min, MAX(amount) AS max FROM orders WHERE status = ? GROUP BY customer_id") {
+        if (res.sql === "SELECT customer_id AS _id, SUM(amount) AS total, AVG(amount) AS avg, MIN(amount) AS min, MAX(amount) AS max FROM orders WHERE status = ? GROUP BY customer_id") {
             logSuccess("✔ Test 37 - 复杂 group 聚合通过");
             passedTests++;
         } else {
@@ -589,7 +589,7 @@ const {
             .group({ _id: '$customer_id', total: { $sum: '$amount' } })
             .sort({ total: -1, _id: 1 });
         let res = agg.toSQL();
-        if (res.sql === "SELECT customer_id, SUM(amount) AS total FROM orders WHERE status = ? GROUP BY customer_id ORDER BY total DESC, _id ASC") {
+        if (res.sql === "SELECT customer_id AS _id, SUM(amount) AS total FROM orders WHERE status = ? GROUP BY customer_id ORDER BY total DESC, _id ASC") {
             logSuccess("✔ Test 38 - 聚合多重排序通过");
             passedTests++;
         } else {
@@ -607,7 +607,7 @@ const {
             .skip(2)
             .limit(5);
         let res = agg.toSQL();
-        if (res.sql === "SELECT customer_id, SUM(amount) AS total FROM orders WHERE status = ? GROUP BY customer_id ORDER BY total DESC LIMIT ? OFFSET ?") {
+        if (res.sql === "SELECT customer_id AS _id, SUM(amount) AS total FROM orders WHERE status = ? GROUP BY customer_id ORDER BY total DESC LIMIT 5 OFFSET 2") {
             logSuccess("✔ Test 39 - 完整聚合管道通过");
             passedTests++;
         } else {
@@ -622,7 +622,7 @@ const {
         agg.group({ _id: '$customer_id', total: { $sum: '$amount' } })
             .sort({ total: 1 });
         let res = agg.toSQL();
-        if (res.sql === "SELECT customer_id, SUM(amount) AS total FROM orders GROUP BY customer_id ORDER BY total ASC") {
+        if (res.sql === "SELECT customer_id AS _id, SUM(amount) AS total FROM orders GROUP BY customer_id ORDER BY total ASC") {
             logSuccess("✔ Test 40 - 聚合无匹配条件通过");
             passedTests++;
         } else {
@@ -637,7 +637,7 @@ const {
         agg.match({ status: 'completed' })
             .group({ _id: null, total: { $sum: '$amount' } });
         let res = agg.toSQL();
-        if (res.sql === "SELECT NULL AS _id, SUM(amount) AS total FROM orders WHERE status = ? GROUP BY _id") {
+        if (res.sql === "SELECT SUM(amount) AS total FROM orders WHERE status = ?") {
             logSuccess("✔ Test 41 - 聚合 group _id 为 null");
             passedTests++;
         } else {
@@ -671,7 +671,7 @@ const {
             .skip(1)
             .limit(5);
         let res = agg.toSQL();
-        if (res.sql === "SELECT customer_id, SUM(amount) AS total FROM orders WHERE status = ? LEFT JOIN users AS u ON orders.user_id = u.id GROUP BY customer_id ORDER BY total DESC LIMIT ? OFFSET ?") {
+        if (res.sql === "SELECT customer_id AS _id, SUM(amount) AS total FROM orders LEFT JOIN users AS u ON orders.user_id = u.id WHERE status = ? GROUP BY customer_id ORDER BY total DESC LIMIT 5 OFFSET 1") {
             logSuccess("✔ Test 43 - 复杂聚合管道通过");
             passedTests++;
         } else {
@@ -718,7 +718,7 @@ const {
             .sort({ total: -1 })
             .limit(3);
         let res = agg.toSQL();
-        if (res.sql === "SELECT customer_id, SUM(amount) AS total FROM orders WHERE status = ? GROUP BY customer_id ORDER BY total DESC LIMIT ?") {
+        if (res.sql === "SELECT customer_id AS _id, SUM(amount) AS total FROM orders WHERE status = ? GROUP BY customer_id ORDER BY total DESC LIMIT 3") {
             logSuccess("✔ Test 46 - 聚合排序后 LIMIT通过");
             passedTests++;
         } else {
@@ -734,7 +734,7 @@ const {
             .group({ _id: '$customer_id', total: { $sum: '$amount' } })
             .sort({ total: -1, _id: 1 });
         let res = agg.toSQL();
-        if (res.sql === "SELECT customer_id, SUM(amount) AS total FROM orders WHERE status = ? GROUP BY customer_id ORDER BY total DESC, _id ASC") {
+        if (res.sql === "SELECT customer_id AS _id, SUM(amount) AS total FROM orders WHERE status = ? GROUP BY customer_id ORDER BY total DESC, _id ASC") {
             logSuccess("✔ Test 47 - 聚合查询多键排序通过");
             passedTests++;
         } else {
@@ -753,7 +753,7 @@ const {
             .skip(1)
             .limit(5);
         let res = agg.toSQL();
-        if (res.sql === "SELECT customer_id, SUM(amount) AS total FROM orders WHERE status = ? AND region = ? LEFT JOIN users AS u ON orders.user_id = u.id GROUP BY customer_id ORDER BY total DESC LIMIT ? OFFSET ?") {
+        if (res.sql === "SELECT customer_id AS _id, SUM(amount) AS total FROM orders LEFT JOIN users AS u ON orders.user_id = u.id WHERE status = ? AND region = ? GROUP BY customer_id ORDER BY total DESC LIMIT 5 OFFSET 1") {
             logSuccess("✔ Test 48 - 复杂聚合管道通过");
             passedTests++;
         } else {
@@ -767,7 +767,7 @@ const {
         const agg = new MongoAggregationBuilder('orders');
         agg.group({ _id: '$customer_id', total: { $sum: '$amount' } });
         let res = agg.toSQL();
-        if (res.sql === "SELECT customer_id, SUM(amount) AS total FROM orders GROUP BY customer_id") {
+        if (res.sql === "SELECT customer_id AS _id, SUM(amount) AS total FROM orders GROUP BY customer_id") {
             logSuccess("✔ Test 49 - 聚合查询仅 group 阶段通过");
             passedTests++;
         } else {
@@ -781,12 +781,12 @@ const {
         const agg = new MongoAggregationBuilder('orders');
         agg.match({ status: 'completed', region: 'EU' })
             .group({ _id: '$customer_id', total: { $sum: '$amount' }, avg: { $avg: '$amount' } })
-            .project({ extra: 1 })
+            .project(["extra"])
             .sort({ total: -1 })
             .skip(2)
             .limit(4);
         let res = agg.toSQL();
-        if (res.sql === "SELECT extra, customer_id, SUM(amount) AS total, AVG(amount) AS avg FROM orders WHERE status = ? AND region = ? GROUP BY customer_id ORDER BY total DESC LIMIT ? OFFSET ?") {
+        if (res.sql === "SELECT extra, customer_id AS _id, SUM(amount) AS total, AVG(amount) AS avg FROM orders WHERE status = ? AND region = ? GROUP BY customer_id ORDER BY total DESC LIMIT 4 OFFSET 2") {
             logSuccess("✔ Test 50 - 综合聚合管道通过");
             passedTests++;
         } else {
