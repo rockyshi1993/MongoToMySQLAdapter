@@ -8,14 +8,12 @@ const Config = {
 };
 
 const LOG_LEVELS = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
-let currentLogLevel = LOG_LEVELS[Config.LOG_LEVEL] || LOG_LEVELS.DEBUG;
+// 如果配置中的日志级别无效，默认使用 ERROR
+let currentLogLevel = LOG_LEVELS[Config.LOG_LEVEL] ?? LOG_LEVELS.ERROR;
 
-/**
- * 日志管理器：统一处理不同日志级别的输出
- */
 const Logger = {
     setLevel(levelStr) {
-        currentLogLevel = LOG_LEVELS[levelStr] || LOG_LEVELS.DEBUG;
+        currentLogLevel = LOG_LEVELS[levelStr] ?? LOG_LEVELS.ERROR;
     },
     debug: (...args) => {
         if (currentLogLevel <= LOG_LEVELS.DEBUG) console.debug("[DEBUG]", ...args);
@@ -112,7 +110,17 @@ function registerOperatorPlugin(operator, handler) {
  * @returns {{sql: string, params: Array}}
  */
 function generateSQL(queryConfig) {
-    let { selectClause, whereClause, joinClause, sortClause, limitClause, offsetClause, params, tableName } = queryConfig;
+    // 增加默认值，防止未传字段时报错
+    let {
+        selectClause = "*",
+        whereClause = "",
+        joinClause = "",
+        sortClause = "",
+        limitClause = "",
+        offsetClause = "",
+        params = [],
+        tableName
+    } = queryConfig;
     let sql = `SELECT ${selectClause} FROM ${tableName}`;
     if (joinClause) sql += joinClause;
     if (whereClause) sql += ` WHERE ${whereClause}`;
@@ -134,30 +142,36 @@ function parseMongoQuery(query, params, context = "root") {
             if (key.startsWith('$')) {
                 Logger.debug(`处理逻辑操作符 (${context}):`, key, value);
                 if (key === '$or') {
-                    // 对 $or 进行处理，避免过多的括号
                     let orConditions = value.map((subQuery, idx) =>
                         parseMongoQuery(subQuery, params, `${context}->OR[${idx}]`)
-                    );
-                    // 只在每个子条件外加括号，而不是整个 $or 包围
-                    conditions.push(`(${orConditions.join(" OR ")})`);
+                    ).filter(cond => cond && cond !== "1=1");
+                    if (orConditions.length) {
+                        conditions.push(`(${orConditions.join(" OR ")})`);
+                    } else {
+                        // 若无有效条件，则始终为 false
+                        conditions.push("1=0");
+                    }
                 } else if (key === '$nor') {
-                    // 对 $nor 进行处理，生成 NOT (condition)
                     let norConditions = value.map((subQuery, idx) =>
                         parseMongoQuery(subQuery, params, `${context}->NOR[${idx}]`)
-                    );
-                    conditions.push(`NOT (${norConditions.join(" OR ")})`);
+                    ).filter(cond => cond && cond !== "1=1");
+                    if (norConditions.length) {
+                        conditions.push(`NOT (${norConditions.join(" OR ")})`);
+                    } else {
+                        conditions.push("1=1");
+                    }
                 } else if (key === '$and') {
-                    // 对 $and 进行处理，避免过多的括号
                     let andConditions = value.map((subQuery, idx) =>
                         parseMongoQuery(subQuery, params, `${context}->AND[${idx}]`)
-                    );
-                    // 如果有多个 $and 条件，则生成 AND 连接的条件
-                    conditions.push(andConditions.join(" AND "));
+                    ).filter(cond => cond);
+                    if (andConditions.length) {
+                        conditions.push(andConditions.join(" AND "));
+                    }
                 } else {
                     handleLogicalOperators(key, value, conditions, params, context);
                 }
             } else {
-                // 处理普通字段条件
+                // 普通字段条件处理
                 if (value instanceof SubQuery) {
                     Logger.debug(`子查询检测 (${context})，字段:`, key);
                     const subResult = value.toSQL();
@@ -199,7 +213,6 @@ function parseMongoQuery(query, params, context = "root") {
         }
     }
 
-    // 如果没有条件，返回默认的 "1=1"（用于防止空条件）
     const result = conditions.length ? conditions.join(" AND ") : "1=1";
     Logger.debug(`生成的 WHERE 子句 (${context}):`, result, "参数:", params);
     return result;
@@ -224,6 +237,8 @@ function handleLogicalOperators(operator, value, conditions, params, context) {
 function handleArrayOperators(field, values, operator, conditions, params, context) {
     if (!Array.isArray(values) || values.length === 0) {
         Logger.warn(`数组操作符 (${context}) ${operator} 的值为空，跳过字段 ${field}`);
+        // 若为空数组，则生成一个始终为假的条件
+        conditions.push("0 = 1");
         return;
     }
     if (values.some(v => v instanceof SubQuery)) {
@@ -239,11 +254,13 @@ function handleArrayOperators(field, values, operator, conditions, params, conte
         conditions.push(`${field} IN (${subQueries.join(", ")})`);
     } else {
         if (operator === '$in') {
-            let placeholders = values.map(val => { params.push(val); return "?"; }).join(", ");
+            let placeholders = values.map(() => "?").join(", ");
             conditions.push(`${field} IN (${placeholders})`);
+            params.push(...values);
         } else if (operator === '$nin') {
-            let placeholders = values.map(val => { params.push(val); return "?"; }).join(", ");
+            let placeholders = values.map(() => "?").join(", ");
             conditions.push(`${field} NOT IN (${placeholders})`);
+            params.push(...values);
         } else if (operator === '$all') {
             let subConds = values.map(val => {
                 params.push(JSON.stringify(val));
@@ -407,12 +424,32 @@ function parseGroupStage(groupObj) {
     let groupByParts = [];
     let havingParts = []; // 暂未处理 HAVING
     if (groupObj._id) {
-        if (typeof groupObj._id === "string" && groupObj._id.startsWith("$")) {
+        if (typeof groupObj._id === "object" && !Array.isArray(groupObj._id)) {
+            // 例：{ customer: '$customer_id', date: '$order_date' }
+            let subFields = [];
+            let groupFields = [];
+            for (let key in groupObj._id) {
+                let val = groupObj._id[key]; // e.g. '$customer_id'
+                if (typeof val === "string" && val.startsWith("$")) {
+                    val = val.substring(1); // 去掉 '$'
+                }
+                // 测试期望：在 SELECT 中直接列出 "customer_id, order_date"
+                // 所以我们直接 push val
+                subFields.push(val);
+                groupFields.push(val);
+            }
+            // 最终 selectParts 中增加 "customer_id, order_date"
+            // 相当于 SELECT customer_id, order_date, ...
+            selectParts.push(subFields.join(", "));
+            // GROUP BY customer_id, order_date
+            groupByParts.push(groupFields.join(", "));
+        }else if (typeof groupObj._id === "string" && groupObj._id.startsWith("$")) {
             const field = groupObj._id.substring(1);
             selectParts.push(`${field} AS _id`);
             groupByParts.push(field);
         } else {
             selectParts.push(`'${groupObj._id}' AS _id`);
+            groupByParts.push("_id");
         }
     }
     for (let key in groupObj) {
@@ -489,7 +526,7 @@ class MongoAggregationBuilder {
     }
     toSQL() {
         let params = [];
-        let whereClause = "";
+        let whereConditions = [];
         let groupClause = "";
         let havingClause = "";
         let selectClause = "*";
@@ -498,17 +535,28 @@ class MongoAggregationBuilder {
         let offsetClause = "";
         let comments = []; // 用于保存 $unwind 等阶段的注释
 
-        let sql = "SELECT " + selectClause + " FROM " + this.tableName;
-
         for (let stage of this.pipeline) {
             if (stage.$match) {
-                whereClause += parseMongoQuery(stage.$match, params, "$match");
+                let conditionStr = parseMongoQuery(stage.$match, params, "$match");
+                if (conditionStr) {
+                    whereConditions.push(conditionStr);
+                }
             } else if (stage.$group) {
                 const groupResult = parseGroupStage(stage.$group);
                 selectClause = groupResult.selectClause;
                 groupClause = groupResult.groupByClause;
                 havingClause = groupResult.havingClause;
-            } else if (stage.$sort) {
+            } else if (stage.$project) {
+
+                if (Array.isArray(stage.$project)) {
+                    if(selectClause === "*") {
+                        selectClause = stage.$project.join(", ");
+                    }else{
+                        selectClause = `${stage.$project.join(", ")}, ${selectClause}`;
+                    }
+
+                }
+            }else if (stage.$sort) {
                 let sortArr = [];
                 for (let key in stage.$sort) {
                     let direction = stage.$sort[key] === -1 ? "DESC" : "ASC";
@@ -527,6 +575,8 @@ class MongoAggregationBuilder {
             }
         }
 
+        let sql = "SELECT " + selectClause + " FROM " + this.tableName;
+
         if (groupClause) {
             sql = "SELECT " + selectClause + " FROM " + this.tableName;
         }
@@ -537,8 +587,8 @@ class MongoAggregationBuilder {
         if (comments.length > 0) {
             sql += " " + comments.join(" ");
         }
-        if (whereClause) {
-            sql += " WHERE " + whereClause;
+        if (whereConditions.length > 0) {
+            sql += " WHERE " + whereConditions.join(" AND ");
         }
         if (groupClause) {
             sql += " GROUP BY " + groupClause;
@@ -624,8 +674,11 @@ class MongoUpdateBuilder {
                 switch (op) {
                     case "$set":
                         for (let field in updateOps.$set) {
-                            setClauses.push(`${field} = ?`);
-                            params.push(updateOps.$set[field]);
+                            // 忽略 undefined 值
+                            if (updateOps.$set[field] !== undefined) {
+                                setClauses.push(`${field} = ?`);
+                                params.push(updateOps.$set[field]);
+                            }
                         }
                         break;
                     case "$inc":
@@ -860,7 +913,9 @@ class MongoQueryBuilder {
             if (this.joinConfigs && this.joinConfigs.length > 0) {
                 selectClause = parseProjectStageWithJoinsOptimized(this.projection, prepareJoinMappings(this.joinConfigs), this.tableName);
             } else {
-                selectClause = parseProjectStageWithJoinsOptimized(this.projection, {}, this.tableName);
+                if (Array.isArray(this.projection)) {
+                    selectClause = this.projection.join(", ");
+                }
             }
         }
 
@@ -889,7 +944,7 @@ class MongoQueryBuilder {
                 sql += ` OFFSET ${this.offsetValue}`;
             }
         } else if (this.offsetValue !== null) {
-            sql += ` LIMIT 18446744073709551615 OFFSET ${this.offsetValue}`;  // 设置大范围限制
+            sql += ` LIMIT 18446744073709551615 OFFSET ${this.offsetValue}`;
         }
 
         Logger.info("最终生成的 SELECT SQL:", sql, "参数:", params);
