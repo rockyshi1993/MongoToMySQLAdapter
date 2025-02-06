@@ -17,9 +17,6 @@
   },
   "homepage": "https://github.com/rockyshi1993/MongoToMySQLAdapter#readme",
   "dependencies": {
-
-  },
-  "devDependencies": {
-
+    "mysql2": "^3.12.0"
   }
 }
