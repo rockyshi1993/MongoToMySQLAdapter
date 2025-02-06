@@ -22,7 +22,7 @@ const {
     MongoAggregationBuilder,
     MongoQueryBuilder,
     Logger
-} = require("../index"); // 根据你的项目结构调整 import 路径
+} = require("../lib"); // 根据你的项目结构调整 import 路径
 
 /* ============================================================
    测试 1：基础聚合（match + group + sort + limit）

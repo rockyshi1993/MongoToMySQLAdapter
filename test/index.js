@@ -10,7 +10,7 @@ const {
     SubQuery,
     mongoToMySQL,
     mongoToMySQLWithJoinsOptimized
-} = require('../index');
+} = require('../lib');
 
 // 使用立即执行的异步函数封装测试用例
 (async () => {

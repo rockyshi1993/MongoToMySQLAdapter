@@ -1,7 +1,7 @@
 "use strict";
 
 // 引入转换模块中的 MongoQueryBuilder 以及其他必要接口（确保 mongo2mysql.js 与该文件在同一目录下）
-const { MongoQueryBuilder, SQLGenerationError } = require('../index');
+const { MongoQueryBuilder, SQLGenerationError } = require('../lib');
 
 // 使用立即执行函数封装测试用例
 (async () => {
